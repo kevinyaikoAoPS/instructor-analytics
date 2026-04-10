@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
 
-// ─── SHARED ───────────────────────────────────────────────────────────────────
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
 const PALETTE = ["#10b981","#6366f1","#f59e0b","#ef4444","#3b82f6","#ec4899","#8b5cf6","#14b8a6","#f97316","#84cc16"];
 
@@ -18,9 +18,10 @@ const BUCKETS = [
   { label: "5m+",     max: Infinity },
 ];
 
+// ─── PARSING HELPERS ──────────────────────────────────────────────────────────
+
 function detectInstructorAndClass(text) {
-  const re = /\[(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\]\s*(\w+)\s*->\s*(\d+):/m;
-  const m = text.match(re);
+  const m = text.match(/\[(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\]\s*(\w+)\s*->\s*(\d+):/m);
   return m ? { instructor: m[2], classId: m[3] } : null;
 }
 
@@ -48,10 +49,10 @@ function extractFirstColumn(text) {
 
 function parseLog(text, instructor, classId) {
   const lines = extractFirstColumn(text).filter(l => l.startsWith("["));
-  const headerRe = new RegExp(`^\\[(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\]\\s*${instructor}\\s*->\\s*${classId}:\\s*(.*)`);
+  const re = new RegExp(`^\\[(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\]\\s*${instructor}\\s*->\\s*${classId}:\\s*(.*)`);
   const data = [];
   for (const line of lines) {
-    const m = line.match(headerRe);
+    const m = line.match(re);
     if (!m) continue;
     const [, date, time, body] = m;
     const ts = new Date(`${date}T${time}`);
@@ -60,6 +61,18 @@ function parseLog(text, instructor, classId) {
     data.push({ ts, date, raw: `${date} ${time}`, msg: body.trim() });
   }
   return data.sort((a, b) => a.ts - b.ts);
+}
+
+function countByDate(text, instructor, classId) {
+  const lines = extractFirstColumn(text).filter(l => l.startsWith("["));
+  const re = new RegExp(`^\\[(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\]\\s*${instructor}\\s*->\\s*${classId}:`);
+  const counts = {};
+  for (const line of lines) {
+    const m = line.match(re);
+    if (!m) continue;
+    counts[m[1]] = (counts[m[1]] || 0) + 1;
+  }
+  return counts;
 }
 
 function computeGaps(rows) {
@@ -72,7 +85,7 @@ function computeGaps(rows) {
   return gaps;
 }
 
-function percentile(arr, p) {
+function pct(arr, p) {
   if (!arr.length) return 0;
   const s = [...arr].sort((a,b)=>a-b);
   return s[Math.min(Math.floor(p/100*s.length), s.length-1)];
@@ -99,13 +112,13 @@ function computeStats(rows, gaps) {
     if (!byDate[d]) byDate[d] = [];
     byDate[d].push(r.ts);
   }
-  const mpms = Object.values(byDate).map(tsList => {
-    const dur = (tsList[tsList.length-1]-tsList[0])/60000;
-    return dur > 0 ? tsList.length/dur : 0;
+  const mpms = Object.values(byDate).map(ts => {
+    const dur = (ts[ts.length-1]-ts[0])/60000;
+    return dur > 0 ? ts.length/dur : 0;
   });
   return {
     total: rows.length, totalGaps: gaps.length,
-    median: +percentile(diffs,50).toFixed(2), p90: +percentile(diffs,90).toFixed(2),
+    median: +pct(diffs,50).toFixed(2), p90: +pct(diffs,90).toFixed(2),
     avg: +avg.toFixed(2), stdDev: +Math.sqrt(variance).toFixed(2),
     avgMsgPerMin: +(mpms.reduce((s,x)=>s+x,0)/mpms.length).toFixed(2),
     longWaits: gaps.filter(g=>g.diffMin>5).length,
@@ -121,20 +134,8 @@ function buildSessionData(gaps) {
     byDate[d].push(g.diffMin);
   }
   return Object.entries(byDate).map(([date, diffs]) => ({
-    date, median: +percentile(diffs,50).toFixed(2), p90: +percentile(diffs,90).toFixed(2),
+    date, median: +pct(diffs,50).toFixed(2), p90: +pct(diffs,90).toFixed(2),
   })).sort((a,b)=>a.date.localeCompare(b.date));
-}
-
-function countByDate(text, instructor, classId) {
-  const lines = extractFirstColumn(text).filter(l => l.startsWith("["));
-  const headerRe = new RegExp(`^\\[(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\]\\s*${instructor}\\s*->\\s*${classId}:`);
-  const counts = {};
-  for (const line of lines) {
-    const m = line.match(headerRe);
-    if (!m) continue;
-    counts[m[1]] = (counts[m[1]] || 0) + 1;
-  }
-  return counts;
 }
 
 // ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
@@ -149,16 +150,6 @@ function FileInput({ label, multiple, onFiles }) {
       <input type="file" accept=".csv,.txt" multiple={multiple}
         onChange={e=>{ const f=Array.from(e.target.files); if(f.length) onFiles(f); e.target.value=""; }}
         style={{fontSize:13,cursor:"pointer",display:"block"}}/>
-    </div>
-  );
-}
-
-function KpiCard({ label, value, sub, color }) {
-  return (
-    <div style={{flex:"1 1 110px",border:"1px solid #e5e7eb",borderRadius:8,padding:"10px 12px",borderTop:`4px solid ${color||"#10b981"}`}}>
-      <div style={{fontSize:11,color:"#666",marginBottom:2}}>{label}</div>
-      <div style={{fontSize:18,fontWeight:700,color:color||"#10b981"}}>{value}</div>
-      {sub&&<div style={{fontSize:11,color:"#999"}}>{sub}</div>}
     </div>
   );
 }
@@ -192,52 +183,9 @@ function GapTable({ gaps, lo, hi }) {
   );
 }
 
-// ─── TAB 1: GAP ANALYZER ──────────────────────────────────────────────────────
+// ─── GAP ANALYZER ─────────────────────────────────────────────────────────────
 
-function GapAnalyzer() {
-  const [files, setFiles] = useState({});
-
-  const handleFile = (slot, file) => {
-    file.text().then(text => {
-      const detected = detectInstructorAndClass(text);
-      if (!detected) { alert("Could not detect instructor/class."); return; }
-      setFiles(prev => ({ ...prev, [slot]: { text, ...detected } }));
-    });
-  };
-
-  const analyzed = useMemo(() => {
-    return Object.entries(files).map(([slot, { text, instructor, classId }], idx) => {
-      const rows = parseLog(text, instructor, classId);
-      const gaps = computeGaps(rows);
-      const stats = computeStats(rows, gaps);
-      const hist = buildHistogram(gaps);
-      const sessionData = buildSessionData(gaps);
-      return { slot, instructor, classId, color: PALETTE[idx], rows, gaps, stats, hist, sessionData };
-    });
-  }, [files]);
-
-  return (
-    <div>
-      <p style={{fontSize:13,color:"#666",marginBottom:16}}>Upload up to two instructor message logs to analyze and compare gap metrics.</p>
-      <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:8}}>
-        <div style={{flex:"1 1 200px"}}>
-          <FileInput label="Instructor A" multiple={false} onFiles={f=>handleFile("A",f[0])}/>
-          {files.A && <div style={{fontSize:12,color:PALETTE[0],marginBottom:8}}>✓ {files.A.instructor} · class {files.A.classId}</div>}
-        </div>
-        <div style={{flex:"1 1 200px"}}>
-          <FileInput label="Instructor B (optional)" multiple={false} onFiles={f=>handleFile("B",f[0])}/>
-          {files.B && <div style={{fontSize:12,color:PALETTE[1],marginBottom:8}}>✓ {files.B.instructor} · class {files.B.classId}</div>}
-        </div>
-      </div>
-      <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:16}}>
-        {analyzed.map(a => <GapPanel key={a.slot} {...a}/>)}
-      </div>
-      {analyzed.length===2 && <GapComparison instructors={analyzed}/>}
-    </div>
-  );
-}
-
-function GapPanel({ instructor, classId, color, rows, gaps, stats, hist, sessionData }) {
+function GapPanel({ instructor, classId, color, gaps, stats, hist, sessionData }) {
   const [view, setView] = useState("histogram");
   const tabs = [{id:"histogram",label:"Distribution"},{id:"sessions",label:"By Session"},{id:"gaps_3_4",label:"3–4m"},{id:"gaps_4_5",label:"4–5m"},{id:"gaps_5plus",label:"5m+"}];
   if (!stats) return null;
@@ -245,7 +193,7 @@ function GapPanel({ instructor, classId, color, rows, gaps, stats, hist, session
     <div style={{border:`1px solid ${color}44`,borderRadius:10,padding:14,flex:"1 1 300px",minWidth:0}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
         <span style={{width:10,height:10,borderRadius:"50%",background:color,display:"inline-block"}}/>
-        <strong>{instructor}</strong><span style={{fontSize:12,color:"#999"}}>class {classId} · {stats.total} msgs</span>
+        <strong>{instructor}</strong><span style={{fontSize:12,color:"#999",marginLeft:4}}>class {classId} · {stats.total} msgs</span>
       </div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
         {[{l:"Median",v:`${stats.median}m`},{l:"P90",v:`${stats.p90}m`},{l:"Msg/Min",v:stats.avgMsgPerMin},{l:"Std Dev",v:`${stats.stdDev}m`,c:stats.stdDev>3?"#ef4444":stats.stdDev>1.5?"#f59e0b":color},{l:">5min",v:`${stats.longWaitPct}%`,c:stats.longWaitPct>20?"#ef4444":"#f59e0b"}].map(k=>(
@@ -334,7 +282,45 @@ function GapComparison({ instructors }) {
   );
 }
 
-// ─── TAB 2: SESSION ANALYZER ──────────────────────────────────────────────────
+function GapAnalyzer() {
+  const [files, setFiles] = useState({});
+  const analyzed = useMemo(() => {
+    return Object.entries(files).map(([slot, { text, instructor, classId }], idx) => {
+      const rows = parseLog(text, instructor, classId);
+      const gaps = computeGaps(rows);
+      const stats = computeStats(rows, gaps);
+      return { slot, instructor, classId, color: PALETTE[idx], rows, gaps, stats, hist: buildHistogram(gaps), sessionData: buildSessionData(gaps) };
+    });
+  }, [files]);
+  const handleFile = (slot, file) => {
+    file.text().then(text => {
+      const d = detectInstructorAndClass(text);
+      if (!d) { alert("Could not detect instructor/class."); return; }
+      setFiles(prev => ({ ...prev, [slot]: { text, ...d } }));
+    });
+  };
+  return (
+    <div>
+      <p style={{fontSize:13,color:"#666",marginBottom:16}}>Upload up to two instructor message logs to compare gap metrics.</p>
+      <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:8}}>
+        <div style={{flex:"1 1 200px"}}>
+          <FileInput label="Instructor A" multiple={false} onFiles={f=>handleFile("A",f[0])}/>
+          {files.A&&<div style={{fontSize:12,color:PALETTE[0],marginBottom:8}}>✓ {files.A.instructor} · class {files.A.classId}</div>}
+        </div>
+        <div style={{flex:"1 1 200px"}}>
+          <FileInput label="Instructor B (optional)" multiple={false} onFiles={f=>handleFile("B",f[0])}/>
+          {files.B&&<div style={{fontSize:12,color:PALETTE[1],marginBottom:8}}>✓ {files.B.instructor} · class {files.B.classId}</div>}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:16}}>
+        {analyzed.map(a=><GapPanel key={a.slot} {...a}/>)}
+      </div>
+      {analyzed.length===2&&<GapComparison instructors={analyzed}/>}
+    </div>
+  );
+}
+
+// ─── SESSION ANALYZER ─────────────────────────────────────────────────────────
 
 function SessionCard({ session: s, index: i, color }) {
   const [view, setView] = useState("histogram");
@@ -344,7 +330,7 @@ function SessionCard({ session: s, index: i, color }) {
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
         <span style={{width:10,height:10,borderRadius:"50%",background:color,display:"inline-block"}}/>
         <strong>Session {i+1} — {s.date}</strong>
-        <span style={{fontSize:11,color:"#999"}}>{s.stats.total} msgs</span>
+        <span style={{fontSize:11,color:"#999",marginLeft:4}}>{s.stats.total} msgs</span>
       </div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
         {[{l:"Median",v:`${s.stats.median}m`},{l:"P90",v:`${s.stats.p90}m`},{l:"Msg/Min",v:s.stats.avgMsgPerMin},{l:"Std Dev",v:`${s.stats.stdDev}m`,c:s.stats.stdDev>3?"#ef4444":s.stats.stdDev>1.5?"#f59e0b":color},{l:">5min",v:`${s.stats.longWaitPct}%`,c:s.stats.longWaitPct>20?"#ef4444":"#f59e0b"}].map(k=>(
@@ -380,6 +366,8 @@ function SessionCard({ session: s, index: i, color }) {
 
 function SessionAnalyzer() {
   const [fileData, setFileData] = useState(null);
+  const [metric, setMetric] = useState("median");
+  const metrics = [{id:"median",label:"Median"},{id:"p90",label:"P90"},{id:"msgPerMin",label:"Msg/Min"},{id:"stdDev",label:"Std Dev"},{id:"longWaitPct",label:">5min %"}];
 
   const sessions = useMemo(() => {
     if (!fileData) return [];
@@ -402,22 +390,20 @@ function SessionAnalyzer() {
     p90: s.stats?.p90,
     msgPerMin: s.stats?.avgMsgPerMin,
     stdDev: s.stats?.stdDev,
+    longWaitPct: s.stats?.longWaitPct,
   })), [sessions]);
-
-  const [metric, setMetric] = useState("median");
-  const metrics = [{id:"median",label:"Median"},{id:"p90",label:"P90"},{id:"msgPerMin",label:"Msg/Min"},{id:"stdDev",label:"Std Dev"},{id:"longWaitPct",label:">5min %"}];
 
   return (
     <div>
       <p style={{fontSize:13,color:"#666",marginBottom:16}}>Upload a full-course log to analyze each session individually.</p>
       <FileInput label="Full course message log (all sessions)" multiple={false} onFiles={f=>{
         f[0].text().then(text=>{
-          const detected = detectInstructorAndClass(text);
-          if (!detected) { alert("Could not detect instructor/class."); return; }
-          setFileData({ text, ...detected });
+          const d = detectInstructorAndClass(text);
+          if (!d) { alert("Could not detect instructor/class."); return; }
+          setFileData({ text, ...d });
         });
       }}/>
-      {fileData && <p style={{fontSize:12,color:"#666",marginBottom:12}}>{fileData.instructor} · class {fileData.classId} · {sessions.length} sessions</p>}
+      {fileData&&<p style={{fontSize:12,color:"#666",marginBottom:12}}>{fileData.instructor} · class {fileData.classId} · {sessions.length} sessions</p>}
       {sessions.length>0&&(
         <>
           <div style={{border:"1px solid #e5e7eb",borderRadius:10,padding:16,marginBottom:16}}>
@@ -450,7 +436,7 @@ function SessionAnalyzer() {
   );
 }
 
-// ─── TAB 3: MESSAGE COUNTER ───────────────────────────────────────────────────
+// ─── MESSAGE COUNTER ──────────────────────────────────────────────────────────
 
 function MessageCounter() {
   const accumulated = useRef([]);
@@ -462,36 +448,36 @@ function MessageCounter() {
     for (const file of files) {
       try {
         const text = await file.text();
-        const detected = detectInstructorAndClass(text);
-        if (!detected) continue;
-        const counts = countByDate(text, detected.instructor, detected.classId);
+        const d = detectInstructorAndClass(text);
+        if (!d) continue;
+        const counts = countByDate(text, d.instructor, d.classId);
         for (const [date, count] of Object.entries(counts)) {
-          const exists = accumulated.current.find(x => x.instructor === detected.instructor && x.date === date);
-          if (!exists) accumulated.current.push({ date, instructor: detected.instructor, classId: detected.classId, count, lesson: 0 });
+          const exists = accumulated.current.find(x => x.instructor===d.instructor && x.date===date);
+          if (!exists) accumulated.current.push({ date, instructor: d.instructor, classId: d.classId, count, lesson: 0 });
         }
-      } catch(err) { console.error(err); }
+      } catch(e) { console.error(e); }
     }
-    const instructors = [...new Set(accumulated.current.map(r => r.instructor))];
+    const instructors = [...new Set(accumulated.current.map(r=>r.instructor))];
     for (const inst of instructors) {
-      const rows = accumulated.current.filter(r => r.instructor === inst).sort((a,b) => a.date.localeCompare(b.date));
-      rows.forEach((r, i) => r.lesson = i + 1);
+      const rows = accumulated.current.filter(r=>r.instructor===inst).sort((a,b)=>a.date.localeCompare(b.date));
+      rows.forEach((r,i)=>r.lesson=i+1);
     }
     setResults([...accumulated.current]);
     setStatus(`Loaded ${accumulated.current.length} lesson(s) across ${instructors.length} instructor(s).`);
   };
 
-  const instructors = [...new Set(results.map(r => r.instructor))];
-  const instColors = Object.fromEntries(instructors.map((inst, i) => [inst, PALETTE[i % PALETTE.length]]));
-  const maxLesson = Math.max(0, ...results.map(r => r.lesson || 0));
-  const chartData = Array.from({length: maxLesson}, (_, i) => {
-    const row = { lesson: `L${i+1}` };
+  const instructors = [...new Set(results.map(r=>r.instructor))];
+  const instColors = Object.fromEntries(instructors.map((inst,i)=>[inst,PALETTE[i%PALETTE.length]]));
+  const maxLesson = Math.max(0,...results.map(r=>r.lesson||0));
+  const chartData = Array.from({length:maxLesson},(_,i)=>{
+    const row = { lesson:`L${i+1}` };
     const counts = [];
     for (const inst of instructors) {
-      const match = results.find(r => r.instructor === inst && r.lesson === i + 1);
-      row[inst] = match ? match.count : null;
+      const match = results.find(r=>r.instructor===inst&&r.lesson===i+1);
+      row[inst] = match?match.count:null;
       if (match) counts.push(match.count);
     }
-    row["Average"] = counts.length ? +(counts.reduce((s,x)=>s+x,0)/counts.length).toFixed(1) : null;
+    row["Average"] = counts.length?+(counts.reduce((s,x)=>s+x,0)/counts.length).toFixed(1):null;
     return row;
   });
 
@@ -499,13 +485,13 @@ function MessageCounter() {
     <div>
       <p style={{fontSize:13,color:"#666",marginBottom:16}}>Upload full-course CSVs (one per instructor) to count messages per lesson.</p>
       <FileInput label="Select one or more CSV files" multiple={true} onFiles={handleFiles}/>
-      {status && <div style={{fontSize:12,color:"#10b981",marginBottom:12,fontWeight:600}}>{status}</div>}
+      {status&&<div style={{fontSize:12,color:"#10b981",marginBottom:12,fontWeight:600}}>{status}</div>}
       {results.length>0&&(
         <>
           <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
             {instructors.map(inst=>{
-              const rows = results.filter(r=>r.instructor===inst);
-              const total = rows.reduce((s,r)=>s+r.count,0);
+              const rows=results.filter(r=>r.instructor===inst);
+              const total=rows.reduce((s,r)=>s+r.count,0);
               return (
                 <div key={inst} style={{flex:"1 1 140px",border:"1px solid #e5e7eb",borderRadius:8,padding:"10px 12px",borderTop:`4px solid ${instColors[inst]}`}}>
                   <div style={{fontSize:12,fontWeight:700,color:instColors[inst],marginBottom:2}}>{inst}</div>
@@ -554,7 +540,9 @@ function MessageCounter() {
                         const diff=val!==null?val-avg:null;
                         return (
                           <td key={inst} style={{padding:"7px 12px"}}>
-                            {val!==null?<span><strong>{val}</strong><span style={{fontSize:11,marginLeft:6,color:diff>0?"#10b981":diff<0?"#ef4444":"#999"}}>{diff>0?`+${diff.toFixed(0)}`:diff<0?diff.toFixed(0):"—"}</span></span>:<span style={{color:"#ccc"}}>—</span>}
+                            {val!==null
+                              ?<span><strong>{val}</strong><span style={{fontSize:11,marginLeft:6,color:diff>0?"#10b981":diff<0?"#ef4444":"#999"}}>{diff>0?`+${diff.toFixed(0)}`:diff<0?diff.toFixed(0):"—"}</span></span>
+                              :<span style={{color:"#ccc"}}>—</span>}
                           </td>
                         );
                       })}
@@ -574,24 +562,22 @@ function MessageCounter() {
   );
 }
 
-// ─── ROOT APP ─────────────────────────────────────────────────────────────────
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: "gap", label: "📊 Gap Analyzer" },
-  { id: "session", label: "🗓 Session Analyzer" },
-  { id: "counter", label: "🔢 Message Counter" },
+  { id:"gap", label:"📊 Gap Analyzer" },
+  { id:"session", label:"🗓 Session Analyzer" },
+  { id:"counter", label:"🔢 Message Counter" },
 ];
 
 export default function App() {
   const [tab, setTab] = useState("gap");
   return (
     <div style={{fontFamily:"sans-serif",background:"var(--bg-primary,#fff)",color:"var(--text-primary,#111)",minHeight:"100vh"}}>
-      {/* Header */}
-      <div style={{background:"#1e293b",padding:"14px 20px",marginBottom:0}}>
+      <div style={{background:"#1e293b",padding:"14px 20px"}}>
         <h1 style={{margin:0,fontSize:18,color:"#fff",fontWeight:700}}>Instructor Analytics</h1>
         <p style={{margin:"2px 0 0",fontSize:12,color:"#94a3b8"}}>Message gap analysis · Session breakdown · Lesson message counts</p>
       </div>
-      {/* Tabs */}
       <div style={{display:"flex",borderBottom:"2px solid #e5e7eb",background:"#f8fafc"}}>
         {TABS.map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)}
@@ -602,7 +588,6 @@ export default function App() {
           </button>
         ))}
       </div>
-      {/* Content */}
       <div style={{padding:20}}>
         {tab==="gap"&&<GapAnalyzer/>}
         {tab==="session"&&<SessionAnalyzer/>}
