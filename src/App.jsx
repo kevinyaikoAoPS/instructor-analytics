@@ -336,6 +336,48 @@ function GapComparison({ instructors }) {
 
 // ─── TAB 2: SESSION ANALYZER ──────────────────────────────────────────────────
 
+function SessionCard({ session: s, index: i, color }) {
+  const [view, setView] = useState("histogram");
+  if (!s.stats) return null;
+  return (
+    <div style={{border:`1px solid ${color}44`,borderRadius:10,padding:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+        <span style={{width:10,height:10,borderRadius:"50%",background:color,display:"inline-block"}}/>
+        <strong>Session {i+1} — {s.date}</strong>
+        <span style={{fontSize:11,color:"#999"}}>{s.stats.total} msgs</span>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+        {[{l:"Median",v:`${s.stats.median}m`},{l:"P90",v:`${s.stats.p90}m`},{l:"Msg/Min",v:s.stats.avgMsgPerMin},{l:"Std Dev",v:`${s.stats.stdDev}m`,c:s.stats.stdDev>3?"#ef4444":s.stats.stdDev>1.5?"#f59e0b":color},{l:">5min",v:`${s.stats.longWaitPct}%`,c:s.stats.longWaitPct>20?"#ef4444":"#f59e0b"}].map(k=>(
+          <div key={k.l} style={{flex:"1 1 60px",background:"#f9fafb",borderRadius:6,padding:"6px 8px",borderTop:`3px solid ${k.c||color}`}}>
+            <div style={{fontSize:10,color:"#888"}}>{k.l}</div>
+            <div style={{fontSize:14,fontWeight:700,color:k.c||color}}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:5,marginBottom:10,flexWrap:"wrap"}}>
+        {[{id:"histogram",label:"Dist"},{id:"gaps_3_4",label:"3–4m"},{id:"gaps_4_5",label:"4–5m"},{id:"gaps_5plus",label:"5m+"}].map(t=>(
+          <button key={t.id} onClick={()=>setView(t.id)}
+            style={{padding:"4px 8px",borderRadius:5,border:"1px solid #ddd",cursor:"pointer",fontSize:11,
+              background:view===t.id?color:"#f5f5f5",color:view===t.id?"#fff":"#333"}}>{t.label}</button>
+        ))}
+      </div>
+      {view==="histogram"&&(
+        <ResponsiveContainer width="100%" height={160}>
+          <BarChart data={s.hist} margin={{top:2,right:5,left:-15,bottom:28}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#eee"/>
+            <XAxis dataKey="label" tick={{fontSize:8}} interval={0} angle={-35} textAnchor="end"/>
+            <YAxis tick={{fontSize:10}}/><Tooltip/>
+            <Bar dataKey="count" fill={color} radius={[2,2,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+      {view==="gaps_3_4"&&<GapTable gaps={s.gaps} lo={3} hi={4}/>}
+      {view==="gaps_4_5"&&<GapTable gaps={s.gaps} lo={4} hi={5}/>}
+      {view==="gaps_5plus"&&<GapTable gaps={s.gaps} lo={5} hi={Infinity}/>}
+    </div>
+  );
+}
+
 function SessionAnalyzer() {
   const [fileData, setFileData] = useState(null);
 
@@ -398,48 +440,9 @@ function SessionAnalyzer() {
             </ResponsiveContainer>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
-            {sessions.map((s,i)=>{
-              const color = PALETTE[i%PALETTE.length];
-              const [view, setView] = useState("histogram");
-              if (!s.stats) return null;
-              return (
-                <div key={s.date} style={{border:`1px solid ${color}44`,borderRadius:10,padding:14}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-                    <span style={{width:10,height:10,borderRadius:"50%",background:color,display:"inline-block"}}/>
-                    <strong>Session {i+1} — {s.date}</strong>
-                    <span style={{fontSize:11,color:"#999"}}>{s.stats.total} msgs</span>
-                  </div>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
-                    {[{l:"Median",v:`${s.stats.median}m`},{l:"P90",v:`${s.stats.p90}m`},{l:"Msg/Min",v:s.stats.avgMsgPerMin},{l:"Std Dev",v:`${s.stats.stdDev}m`,c:s.stats.stdDev>3?"#ef4444":s.stats.stdDev>1.5?"#f59e0b":color},{l:">5min",v:`${s.stats.longWaitPct}%`,c:s.stats.longWaitPct>20?"#ef4444":"#f59e0b"}].map(k=>(
-                      <div key={k.l} style={{flex:"1 1 60px",background:"#f9fafb",borderRadius:6,padding:"6px 8px",borderTop:`3px solid ${k.c||color}`}}>
-                        <div style={{fontSize:10,color:"#888"}}>{k.l}</div>
-                        <div style={{fontSize:14,fontWeight:700,color:k.c||color}}>{k.v}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{display:"flex",gap:5,marginBottom:10,flexWrap:"wrap"}}>
-                    {[{id:"histogram",label:"Dist"},{id:"gaps_3_4",label:"3–4m"},{id:"gaps_4_5",label:"4–5m"},{id:"gaps_5plus",label:"5m+"}].map(t=>(
-                      <button key={t.id} onClick={()=>setView(t.id)}
-                        style={{padding:"4px 8px",borderRadius:5,border:"1px solid #ddd",cursor:"pointer",fontSize:11,
-                          background:view===t.id?color:"#f5f5f5",color:view===t.id?"#fff":"#333"}}>{t.label}</button>
-                    ))}
-                  </div>
-                  {view==="histogram"&&(
-                    <ResponsiveContainer width="100%" height={160}>
-                      <BarChart data={s.hist} margin={{top:2,right:5,left:-15,bottom:28}}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#eee"/>
-                        <XAxis dataKey="label" tick={{fontSize:8}} interval={0} angle={-35} textAnchor="end"/>
-                        <YAxis tick={{fontSize:10}}/><Tooltip/>
-                        <Bar dataKey="count" fill={color} radius={[2,2,0,0]}/>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )}
-                  {view==="gaps_3_4"&&<GapTable gaps={s.gaps} lo={3} hi={4}/>}
-                  {view==="gaps_4_5"&&<GapTable gaps={s.gaps} lo={4} hi={5}/>}
-                  {view==="gaps_5plus"&&<GapTable gaps={s.gaps} lo={5} hi={Infinity}/>}
-                </div>
-              );
-            })}
+            {sessions.map((s,i)=>(
+              <SessionCard key={s.date} session={s} index={i} color={PALETTE[i%PALETTE.length]}/>
+            ))}
           </div>
         </>
       )}
